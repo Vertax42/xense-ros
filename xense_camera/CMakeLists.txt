@@ -41,6 +41,13 @@ endif()
 
 find_package(xensesdk REQUIRED)
 
+# onnxruntime is a private dependency of libxensesdk but its symbols are not
+# fully resolved inside the shared library; link it explicitly here.
+find_library(ONNXRUNTIME_LIB onnxruntime
+  HINTS /usr/local/lib /usr/lib
+  REQUIRED)
+message(STATUS "onnxruntime: ${ONNXRUNTIME_LIB}")
+
 add_executable(xense_camera_node
   src/xense_camera_node_main.cpp
   src/xense_camera_node.cpp
@@ -67,6 +74,7 @@ ament_target_dependencies(xense_camera_node
 
 target_link_libraries(xense_camera_node
   xense::xensesdk
+  ${ONNXRUNTIME_LIB}
 )
 
 install(TARGETS xense_camera_node
