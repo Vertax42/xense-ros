@@ -1,0 +1,101 @@
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+from launch.conditions import IfCondition
+
+
+def launch_setup(context, *args, **kwargs):
+    camera_name = LaunchConfiguration('camera_name').perform(context)
+    params_file = LaunchConfiguration('params_file').perform(context)
+
+    parameters = [
+        {
+            'enable_raw': LaunchConfiguration('enable_raw'),
+            'enable_rectified': LaunchConfiguration('enable_rectified'),
+            'enable_diff': LaunchConfiguration('enable_diff'),
+            'enable_depth': LaunchConfiguration('enable_depth'),
+            'device_serial': LaunchConfiguration('device_serial'),
+            'device_index': LaunchConfiguration('device_index'),
+            'diff_mode': LaunchConfiguration('diff_mode'),
+            'inference_backend': LaunchConfiguration('inference_backend'),
+            'use_gpu': LaunchConfiguration('use_gpu'),
+            'camera_frame_id': LaunchConfiguration('camera_frame_id'),
+            'publish_tf': LaunchConfiguration('publish_tf'),
+        }
+    ]
+
+    # Prepend params file if provided
+    if params_file:
+        parameters = [params_file] + parameters
+
+    node = Node(
+        package='xense_camera',
+        executable='xense_camera_node',
+        name=camera_name,
+        parameters=parameters,
+        output='screen',
+        emulate_tty=True,
+    )
+
+    return [node]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'camera_name',
+            default_value='xense_camera',
+            description='Name of the camera node (also used as ROS namespace prefix)'),
+        DeclareLaunchArgument(
+            'params_file',
+            default_value='',
+            description='Path to a YAML parameters file (optional)'),
+        DeclareLaunchArgument(
+            'device_serial',
+            default_value='',
+            description='Xense sensor serial number. Empty string = auto-detect first device.'),
+        DeclareLaunchArgument(
+            'device_index',
+            default_value='-1',
+            description='V4L2 device index. -1 = auto-detect.'),
+        DeclareLaunchArgument(
+            'enable_raw',
+            default_value='false',
+            description='Publish raw 640x480 BGR8 camera frames on ~/raw/image_raw'),
+        DeclareLaunchArgument(
+            'enable_rectified',
+            default_value='true',
+            description='Publish 400x700 grid-rectified BGR8 frames on ~/rectified/image'),
+        DeclareLaunchArgument(
+            'enable_diff',
+            default_value='false',
+            description='Publish difference image on ~/diff/image (implies enable_rectified)'),
+        DeclareLaunchArgument(
+            'enable_depth',
+            default_value='false',
+            description='Publish tactile depth (Float32) on ~/depth/image (implies enable_diff)'),
+        DeclareLaunchArgument(
+            'diff_mode',
+            default_value='SingleInference',
+            description='DiffProcessor mode: SingleInference (fast) or PerFrameInference (accurate)'),
+        DeclareLaunchArgument(
+            'inference_backend',
+            default_value='Auto',
+            description='Inference backend: Auto, CPU, ONNX, MIGraphX, RKNN, CoreML, OpenVINO, DirectML'),
+        DeclareLaunchArgument(
+            'use_gpu',
+            default_value='true',
+            description='Use GPU acceleration for inference if available'),
+        DeclareLaunchArgument(
+            'camera_frame_id',
+            default_value='xense_camera_link',
+            description='TF frame ID for all published sensor data'),
+        DeclareLaunchArgument(
+            'publish_tf',
+            default_value='true',
+            description='Publish a static transform from world -> camera_frame_id'),
+
+        OpaqueFunction(function=launch_setup),
+    ])

@@ -1,0 +1,47 @@
+/**
+ * Default parameters for xense_camera_node.
+ *
+ * Override any value from the command line:
+ *   ros2 launch xense_camera xense_launch.py enable_depth:=true
+ *
+ * Or supply this file via:
+ *   ros2 launch xense_camera xense_launch.py params_file:=/path/to/xense_params.yaml
+ */
+
+xense_camera:
+  ros__parameters:
+
+    # --- Device selection ---
+    # Serial number of the Xense sensor. Leave empty to auto-detect the first device.
+    device_serial: ""
+    # V4L2 device index. Use -1 for auto-detect, or 0/1/2/... for a specific device.
+    device_index: -1
+
+    # --- Stream enable flags ---
+    # Each flag enables the corresponding output topic.
+    # Depth implies Diff; Diff implies Rectified (upstream streams are added automatically).
+    enable_raw: false         # ~/raw/image_raw    (640x480 bgr8)
+    enable_rectified: true    # ~/rectified/image   (400x700 bgr8)
+    enable_diff: false        # ~/diff/image        (400x700 32FC1 or bgr8)
+    enable_depth: false       # ~/depth/image       (400x700 32FC1, values in [0,1])
+
+    # --- Processing options ---
+    # DiffProcessor mode.
+    #   SingleInference    – Reference frame is inferred once (fast, ~10x speedup).
+    #   PerFrameInference  – Reference is inferred every frame (more accurate, slower).
+    diff_mode: "SingleInference"
+
+    # Inference backend for the neural network models.
+    # Options: Auto, CPU, ONNX, MIGraphX, RKNN, CoreML, OpenVINO, DirectML
+    inference_backend: "Auto"
+
+    # Use GPU acceleration (if available for the selected backend).
+    use_gpu: true
+
+    # --- TF / coordinate frames ---
+    # TF frame ID attached to all published image headers.
+    camera_frame_id: "xense_camera_link"
+
+    # Publish a static identity transform from 'world' -> camera_frame_id.
+    # Disable if you manage the sensor transform externally (e.g., from a URDF).
+    publish_tf: true
