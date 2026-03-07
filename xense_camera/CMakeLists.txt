@@ -17,6 +17,13 @@ find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(xense_msgs REQUIRED)
+
+# libxensesdk public dependencies (must be found before xensesdk targets are imported)
+find_package(spdlog REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc video imgcodecs)
+find_package(Eigen3 REQUIRED)
+find_package(nlohmann_json REQUIRED)
+
 find_package(xensesdk REQUIRED)
 
 add_executable(xense_camera_node
