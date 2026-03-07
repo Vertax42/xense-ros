@@ -22,7 +22,21 @@ find_package(xense_msgs REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc video imgcodecs)
 find_package(Eigen3 REQUIRED)
-find_package(nlohmann_json REQUIRED)
+find_package(nlohmann_json QUIET)
+if(NOT nlohmann_json_FOUND)
+  # nlohmann_json is header-only; if no CMake config is installed, locate the
+  # header directly and create an interface target so xensesdkTargets.cmake
+  # can resolve nlohmann_json::nlohmann_json without errors.
+  find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp
+    HINTS /usr/include /usr/local/include)
+  if(NOT NLOHMANN_JSON_INCLUDE_DIR)
+    message(FATAL_ERROR
+      "nlohmann_json not found. Install with: sudo apt install nlohmann-json3-dev")
+  endif()
+  add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED)
+  set_target_properties(nlohmann_json::nlohmann_json PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${NLOHMANN_JSON_INCLUDE_DIR}")
+endif()
 
 find_package(xensesdk REQUIRED)
 
