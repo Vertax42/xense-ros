@@ -25,6 +25,10 @@ ROS2 wrapper for the [Xense](https://xense.ai) tactile-visual sensor, built on *
   cmake --build build -j$(nproc)
   sudo cmake --install build
   ```
+- System dependencies:
+  ```bash
+  sudo apt install -y nlohmann-json3-dev
+  ```
 - ROS2 dependencies:
   ```bash
   sudo apt install -y \
@@ -33,8 +37,7 @@ ROS2 wrapper for the [Xense](https://xense.ai) tactile-visual sensor, built on *
     ros-jazzy-geometry-msgs \
     ros-jazzy-cv-bridge \
     ros-jazzy-image-transport \
-    ros-jazzy-tf2-ros \
-    ros-jazzy-camera-info-manager
+    ros-jazzy-tf2-ros
   ```
 
 ---
