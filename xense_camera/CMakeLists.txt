@@ -16,7 +16,6 @@ find_package(geometry_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(tf2_ros REQUIRED)
-find_package(camera_info_manager REQUIRED)
 find_package(xense_msgs REQUIRED)
 find_package(xensesdk REQUIRED)
 
@@ -41,7 +40,6 @@ ament_target_dependencies(xense_camera_node
   cv_bridge
   image_transport
   tf2_ros
-  camera_info_manager
   xense_msgs
 )
 
