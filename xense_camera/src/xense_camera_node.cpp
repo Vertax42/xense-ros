@@ -16,16 +16,23 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
   device_index_ = get_parameter("device_index").as_int();
   enable_raw_ = get_parameter("enable_raw").as_bool();
   enable_rectified_ = get_parameter("enable_rectified").as_bool();
-  enable_diff_ = get_parameter("enable_diff").as_bool();
-  enable_depth_ = get_parameter("enable_depth").as_bool();
-  diff_mode_ = get_parameter("diff_mode").as_string();
+  enable_diff_single_ = get_parameter("enable_diff_single").as_bool();
+  enable_diff_continuous_ = get_parameter("enable_diff_continuous").as_bool();
   inference_backend_ = get_parameter("inference_backend").as_string();
   use_gpu_ = get_parameter("use_gpu").as_bool();
   camera_frame_id_ = get_parameter("camera_frame_id").as_string();
   publish_tf_ = get_parameter("publish_tf").as_bool();
   publish_fps_ = get_parameter("publish_fps").as_double();
 
-  if (!enable_raw_ && !enable_rectified_ && !enable_diff_ && !enable_depth_) {
+  if (enable_diff_single_ && enable_diff_continuous_) {
+    RCLCPP_WARN(get_logger(),
+      "Both enable_diff_single and enable_diff_continuous are set. "
+      "Only one diff mode can run per pipeline. Using PerFrameInference (continuous). "
+      "~/diff/single/image will NOT be published.");
+    enable_diff_single_ = false;
+  }
+
+  if (!enable_raw_ && !enable_rectified_ && !enable_diff_single_ && !enable_diff_continuous_) {
     RCLCPP_WARN(get_logger(),
       "No streams enabled. Defaulting to enable_rectified=true.");
     enable_rectified_ = true;
@@ -53,14 +60,13 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
   auto config = build_pipeline_config();
 
   RCLCPP_INFO(get_logger(), "Starting xense pipeline...");
-  RCLCPP_INFO(get_logger(), "  device_serial   : '%s'", device_serial_.c_str());
-  RCLCPP_INFO(get_logger(), "  enable_raw      : %s", enable_raw_ ? "true" : "false");
-  RCLCPP_INFO(get_logger(), "  enable_rectified: %s", enable_rectified_ ? "true" : "false");
-  RCLCPP_INFO(get_logger(), "  enable_diff     : %s", enable_diff_ ? "true" : "false");
-  RCLCPP_INFO(get_logger(), "  enable_depth    : %s", enable_depth_ ? "true" : "false");
-  RCLCPP_INFO(get_logger(), "  diff_mode       : %s", diff_mode_.c_str());
-  RCLCPP_INFO(get_logger(), "  inference_backend: %s", inference_backend_.c_str());
-  RCLCPP_INFO(get_logger(), "  publish_fps     : %.1f", publish_fps_);
+  RCLCPP_INFO(get_logger(), "  device_serial      : '%s'", device_serial_.c_str());
+  RCLCPP_INFO(get_logger(), "  enable_raw         : %s", enable_raw_ ? "true" : "false");
+  RCLCPP_INFO(get_logger(), "  enable_rectified   : %s", enable_rectified_ ? "true" : "false");
+  RCLCPP_INFO(get_logger(), "  enable_diff_single : %s", enable_diff_single_ ? "true" : "false");
+  RCLCPP_INFO(get_logger(), "  enable_diff_cont   : %s", enable_diff_continuous_ ? "true" : "false");
+  RCLCPP_INFO(get_logger(), "  inference_backend  : %s", inference_backend_.c_str());
+  RCLCPP_INFO(get_logger(), "  publish_fps        : %.1f", publish_fps_);
 
   pipeline_.start(config, [this](xense::FrameSet frames) {
     on_frame_set(std::move(frames));
@@ -94,9 +100,8 @@ void XenseCameraNode::declare_parameters()
   declare_parameter<int>("device_index", -1);
   declare_parameter<bool>("enable_raw", false);
   declare_parameter<bool>("enable_rectified", true);
-  declare_parameter<bool>("enable_diff", false);
-  declare_parameter<bool>("enable_depth", false);
-  declare_parameter<std::string>("diff_mode", "SingleInference");
+  declare_parameter<bool>("enable_diff_single", false);
+  declare_parameter<bool>("enable_diff_continuous", false);
   declare_parameter<std::string>("inference_backend", "Auto");
   declare_parameter<bool>("use_gpu", true);
   declare_parameter<std::string>("camera_frame_id", "xense_camera_link");
@@ -111,19 +116,16 @@ xense::PipelineConfig XenseCameraNode::build_pipeline_config()
   if (enable_raw_) {
     streams.push_back("Raw");
   }
-  if (enable_rectified_ || enable_diff_ || enable_depth_) {
+  if (enable_rectified_ || enable_diff_single_ || enable_diff_continuous_) {
     streams.push_back("Rectified");
   }
-  if (enable_diff_ || enable_depth_) {
+  if (enable_diff_single_ || enable_diff_continuous_) {
     streams.push_back("Diff");
-  }
-  if (enable_depth_) {
-    streams.push_back("Depth");
   }
 
   xense::PipelineConfig config;
   config.streams = streams;
-  config.diff_mode = diff_mode_;
+  config.diff_mode = enable_diff_continuous_ ? "PerFrameInference" : "SingleInference";
   config.inference_backend = inference_backend_;
   config.use_gpu = use_gpu_;
 
@@ -140,23 +142,23 @@ xense::PipelineConfig XenseCameraNode::build_pipeline_config()
 void XenseCameraNode::create_publishers()
 {
   camera_info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>(
-    "~/camera_info", rclcpp::SensorDataQoS());
+    "~/camera_info", rclcpp::QoS(10));
 
   if (enable_raw_) {
     raw_pub_ = image_transport::create_publisher(
-      this, "~/raw/image_raw", rmw_qos_profile_sensor_data);
+      this, "~/raw/image_raw", rmw_qos_profile_default);
   }
-  if (enable_rectified_ || enable_diff_ || enable_depth_) {
+  if (enable_rectified_ || enable_diff_single_ || enable_diff_continuous_) {
     rectified_pub_ = image_transport::create_publisher(
-      this, "~/rectified/image", rmw_qos_profile_sensor_data);
+      this, "~/rectified/image", rmw_qos_profile_default);
   }
-  if (enable_diff_ || enable_depth_) {
-    diff_pub_ = image_transport::create_publisher(
-      this, "~/diff/image", rmw_qos_profile_sensor_data);
+  if (enable_diff_single_) {
+    diff_single_pub_ = image_transport::create_publisher(
+      this, "~/diff/single/image", rmw_qos_profile_default);
   }
-  if (enable_depth_) {
-    depth_pub_ = image_transport::create_publisher(
-      this, "~/depth/image", rmw_qos_profile_sensor_data);
+  if (enable_diff_continuous_) {
+    diff_continuous_pub_ = image_transport::create_publisher(
+      this, "~/diff/continuous/image", rmw_qos_profile_default);
   }
 }
 
@@ -184,6 +186,25 @@ void XenseCameraNode::on_frame_set(xense::FrameSet frames)
   if (frames.empty()) {
     return;
   }
+
+  // Log SDK frame delivery interval using hardware timestamps.
+  // If gaps appear here, the delay is in the SDK/hardware layer, not ROS.
+  if (auto first = frames.first(); first.valid()) {
+    static int64_t last_ts_us = 0;
+    const int64_t ts_us = first.timestamp_us();
+    if (last_ts_us != 0) {
+      const double interval_ms = (ts_us - last_ts_us) / 1000.0;
+      if (interval_ms > 50.0) {
+        RCLCPP_WARN(get_logger(),
+          "[on_frame_set] Large SDK frame gap: %.1f ms (hardware ts)", interval_ms);
+      } else {
+        RCLCPP_DEBUG(get_logger(),
+          "[on_frame_set] SDK frame interval: %.1f ms", interval_ms);
+      }
+    }
+    last_ts_us = ts_us;
+  }
+
   {
     std::lock_guard<std::mutex> lock(frame_mutex_);
     latest_frame_ = std::move(frames);
@@ -234,6 +255,46 @@ void XenseCameraNode::publish_loop()
 
 void XenseCameraNode::publish_frame_set(xense::FrameSet & frames)
 {
+  using clock = std::chrono::steady_clock;
+  using ms = std::chrono::duration<double, std::milli>;
+
+  static clock::time_point last_publish_wall;
+  const auto publish_wall = clock::now();
+
+  if (last_publish_wall.time_since_epoch().count() != 0) {
+    const double interval_ms = ms(publish_wall - last_publish_wall).count();
+    if (interval_ms > 50.0) {
+      RCLCPP_WARN(get_logger(), "[publish] Large publish gap: %.1f ms", interval_ms);
+    } else {
+      RCLCPP_DEBUG(get_logger(), "[publish] Publish interval: %.1f ms", interval_ms);
+    }
+  }
+
+  // Internal FPS counter: measures node publish rate regardless of DDS subscriber load.
+  // Use this (or `ros2 topic hz ~/camera_info`) instead of `ros2 topic hz ~/rectified/image`
+  // — large image messages can overflow the Python subscriber's BEST_EFFORT queue (depth=5).
+  {
+    static uint32_t frame_count = 0;
+    static clock::time_point fps_window_start = publish_wall;
+    ++frame_count;
+    const double window_ms = ms(publish_wall - fps_window_start).count();
+    if (window_ms >= 3000.0) {
+      RCLCPP_INFO(get_logger(), "[fps] Node publish rate: %.2f Hz (%u frames / %.1f s)",
+        frame_count * 1000.0 / window_ms, frame_count, window_ms / 1000.0);
+      frame_count = 0;
+      fps_window_start = publish_wall;
+    }
+  }
+
+  // Latency: SDK hardware timestamp vs wall clock (both steady_clock-based)
+  if (auto first = frames.first(); first.valid()) {
+    const int64_t sdk_us = first.timestamp_us();
+    const int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+      publish_wall.time_since_epoch()).count();
+    RCLCPP_DEBUG(get_logger(), "[publish] Frame-to-publish latency: %.1f ms",
+      (now_us - sdk_us) / 1000.0);
+  }
+
   rclcpp::Time stamp = now();
   if (auto first = frames.first(); first.valid()) {
     stamp = rclcpp::Time(first.timestamp_us() * 1000LL);
@@ -257,7 +318,7 @@ void XenseCameraNode::publish_frame_set(xense::FrameSet & frames)
     }
   }
 
-  if ((enable_rectified_ || enable_diff_ || enable_depth_) &&
+  if ((enable_rectified_ || enable_diff_single_ || enable_diff_continuous_) &&
     frames.contains(xense::StreamType::Rectified))
   {
     auto frame = frames.get(xense::StreamType::Rectified);
@@ -270,30 +331,27 @@ void XenseCameraNode::publish_frame_set(xense::FrameSet & frames)
     }
   }
 
-  if ((enable_diff_ || enable_depth_) && frames.contains(xense::StreamType::Diff)) {
+  if ((enable_diff_single_ || enable_diff_continuous_) &&
+    frames.contains(xense::StreamType::Diff))
+  {
     auto frame = frames.get(xense::StreamType::Diff);
     if (frame.valid()) {
       try {
         sensor_msgs::msg::Image msg = (frame.format() == xense::FrameFormat::Float32)
           ? frame_to_float32(frame, camera_frame_id_)
           : frame_to_bgr8(frame, camera_frame_id_);
-        diff_pub_.publish(msg);
+        if (enable_diff_single_) {
+          diff_single_pub_.publish(msg);
+        } else {
+          diff_continuous_pub_.publish(msg);
+        }
       } catch (const std::exception & e) {
         RCLCPP_WARN(get_logger(), "Failed to publish diff frame: %s", e.what());
       }
     }
   }
 
-  if (enable_depth_ && frames.contains(xense::StreamType::Depth)) {
-    auto frame = frames.get(xense::StreamType::Depth);
-    if (frame.valid()) {
-      try {
-        depth_pub_.publish(frame_to_float32(frame, camera_frame_id_));
-      } catch (const std::exception & e) {
-        RCLCPP_WARN(get_logger(), "Failed to publish depth frame: %s", e.what());
-      }
-    }
-  }
+  last_publish_wall = publish_wall;
 }
 
 }  // namespace xense_camera
