@@ -39,7 +39,6 @@ private:
   xense::Pipeline pipeline_;
 
   // Publishers
-  std::shared_ptr<image_transport::ImageTransport> image_transport_;
   image_transport::Publisher raw_pub_;
   image_transport::Publisher rectified_pub_;
   image_transport::Publisher diff_pub_;

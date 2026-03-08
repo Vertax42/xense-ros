@@ -122,23 +122,20 @@ xense::PipelineConfig XenseCameraNode::build_pipeline_config()
 
 void XenseCameraNode::create_publishers()
 {
-  image_transport_ = std::make_shared<image_transport::ImageTransport>(
-    shared_from_this());
-
   camera_info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>(
     "~/camera_info", rclcpp::QoS(10));
 
   if (enable_raw_) {
-    raw_pub_ = image_transport_->advertise("~/raw/image_raw", 10);
+    raw_pub_ = image_transport::create_publisher(this, "~/raw/image_raw");
   }
   if (enable_rectified_ || enable_diff_ || enable_depth_) {
-    rectified_pub_ = image_transport_->advertise("~/rectified/image", 10);
+    rectified_pub_ = image_transport::create_publisher(this, "~/rectified/image");
   }
   if (enable_diff_ || enable_depth_) {
-    diff_pub_ = image_transport_->advertise("~/diff/image", 10);
+    diff_pub_ = image_transport::create_publisher(this, "~/diff/image");
   }
   if (enable_depth_) {
-    depth_pub_ = image_transport_->advertise("~/depth/image", 10);
+    depth_pub_ = image_transport::create_publisher(this, "~/depth/image");
   }
 }
 
