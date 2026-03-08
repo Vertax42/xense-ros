@@ -30,9 +30,8 @@ private:
   int device_index_;
   bool enable_raw_;
   bool enable_rectified_;
-  bool enable_diff_;
-  bool enable_depth_;
-  std::string diff_mode_;
+  bool enable_diff_single_;
+  bool enable_diff_continuous_;
   std::string inference_backend_;
   bool use_gpu_;
   std::string camera_frame_id_;
@@ -45,8 +44,8 @@ private:
   // Publishers
   image_transport::Publisher raw_pub_;
   image_transport::Publisher rectified_pub_;
-  image_transport::Publisher diff_pub_;
-  image_transport::Publisher depth_pub_;
+  image_transport::Publisher diff_single_pub_;
+  image_transport::Publisher diff_continuous_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub_;
 
   // TF
