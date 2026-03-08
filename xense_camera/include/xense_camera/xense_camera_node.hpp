@@ -2,12 +2,7 @@
 
 #include <memory>
 #include <string>
-#include <set>
-#include <queue>
 #include <mutex>
-#include <condition_variable>
-#include <thread>
-#include <atomic>
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -53,21 +48,22 @@ private:
   // TF
   std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
 
-  // Publish thread: decouples SDK capture thread from ROS publishing
-  std::queue<xense::FrameSet> frame_queue_;
-  std::mutex queue_mutex_;
-  std::condition_variable queue_cv_;
-  std::thread publish_thread_;
-  std::atomic<bool> publish_thread_running_{false};
+  // Latest frame slot: SDK callback writes here, timer reads at fixed rate
+  xense::FrameSet latest_frame_;
+  std::mutex frame_mutex_;
+  bool has_new_frame_{false};
+  rclcpp::TimerBase::SharedPtr publish_timer_;
 
   // Internal
   void declare_parameters();
   xense::PipelineConfig build_pipeline_config();
   void create_publishers();
   void publish_static_tf();
-  void on_frame_set(xense::FrameSet frames);   // called from SDK thread: enqueues only
-  void publish_loop();                          // runs in publish_thread_
+  void on_frame_set(xense::FrameSet frames);   // called from SDK thread: stores latest frame
+  void publish_timer_cb();                      // fires at fixed publish_fps_ rate
   void publish_frame_set(xense::FrameSet & frames);
+
+  double publish_fps_;
 };
 
 }  // namespace xense_camera

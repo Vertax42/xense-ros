@@ -40,10 +40,13 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
     publish_static_tf();
   }
 
-  // Start publish thread before pipeline so it is ready to drain frames immediately.
-  // This decouples the SDK capture thread from ROS publishing work.
-  publish_thread_running_ = true;
-  publish_thread_ = std::thread(&XenseCameraNode::publish_loop, this);
+  // Start fixed-rate timer to publish frames. The timer fires at publish_fps_ Hz
+  // regardless of SDK delivery jitter, giving stable ros2 topic hz output.
+  publish_fps_ = get_parameter("publish_fps").as_double();
+  const auto period_ms = std::chrono::duration<double, std::milli>(1000.0 / publish_fps_);
+  publish_timer_ = create_wall_timer(
+    std::chrono::duration_cast<std::chrono::nanoseconds>(period_ms),
+    std::bind(&XenseCameraNode::publish_timer_cb, this));
 
   // Build and start pipeline
   auto config = build_pipeline_config();
@@ -66,23 +69,14 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
 
 XenseCameraNode::~XenseCameraNode()
 {
-  // Stop pipeline first so no new frames are enqueued.
+  publish_timer_->cancel();
+
   try {
     if (pipeline_.is_running()) {
       pipeline_.stop();
     }
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "Error stopping pipeline: %s", e.what());
-  }
-
-  // Signal publish thread to exit and wait for it to finish.
-  {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
-    publish_thread_running_ = false;
-  }
-  queue_cv_.notify_all();
-  if (publish_thread_.joinable()) {
-    publish_thread_.join();
   }
 }
 
@@ -99,6 +93,7 @@ void XenseCameraNode::declare_parameters()
   declare_parameter<bool>("use_gpu", true);
   declare_parameter<std::string>("camera_frame_id", "xense_camera_link");
   declare_parameter<bool>("publish_tf", true);
+  declare_parameter<double>("publish_fps", 30.0);
 }
 
 xense::PipelineConfig XenseCameraNode::build_pipeline_config()
@@ -176,48 +171,32 @@ void XenseCameraNode::publish_static_tf()
 }
 
 // Called from the SDK's capture thread — must return immediately.
-// Only enqueues the FrameSet; all conversion and publishing happens in publish_loop().
+// Overwrites the latest frame slot; old frame is discarded if not yet published.
 void XenseCameraNode::on_frame_set(xense::FrameSet frames)
 {
   if (frames.empty()) {
     return;
   }
-
-  {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
-    // Drop the oldest frame if the publish thread is falling behind,
-    // so V4L2 buffers are never left un-dequeued.
-    if (frame_queue_.size() >= 2) {
-      frame_queue_.pop();
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-        "Publish thread too slow; dropping oldest frame.");
-    }
-    frame_queue_.push(std::move(frames));
-  }
-  queue_cv_.notify_one();
+  std::lock_guard<std::mutex> lock(frame_mutex_);
+  latest_frame_ = std::move(frames);
+  has_new_frame_ = true;
 }
 
-// Runs in publish_thread_ — does all frame conversion and ROS publishing.
-void XenseCameraNode::publish_loop()
+// Called by the ROS WallTimer at a fixed rate (publish_fps_).
+// Grabs the latest frame and publishes it. If no new frame has arrived since
+// the last tick, skips publishing rather than re-publishing a stale frame.
+void XenseCameraNode::publish_timer_cb()
 {
-  while (true) {
-    xense::FrameSet frames;
-    {
-      std::unique_lock<std::mutex> lock(queue_mutex_);
-      queue_cv_.wait(lock, [this] {
-        return !frame_queue_.empty() || !publish_thread_running_;
-      });
-
-      if (!publish_thread_running_ && frame_queue_.empty()) {
-        break;
-      }
-
-      frames = std::move(frame_queue_.front());
-      frame_queue_.pop();
+  xense::FrameSet frames;
+  {
+    std::lock_guard<std::mutex> lock(frame_mutex_);
+    if (!has_new_frame_) {
+      return;
     }
-
-    publish_frame_set(frames);
+    frames = std::move(latest_frame_);
+    has_new_frame_ = false;
   }
+  publish_frame_set(frames);
 }
 
 void XenseCameraNode::publish_frame_set(xense::FrameSet & frames)
