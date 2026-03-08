@@ -122,20 +122,28 @@ xense::PipelineConfig XenseCameraNode::build_pipeline_config()
 
 void XenseCameraNode::create_publishers()
 {
+  // Use SensorDataQoS (BEST_EFFORT, VOLATILE, depth=10) for all sensor topics.
+  // BEST_EFFORT avoids blocking the publish call when subscribers are slow.
+  const auto sensor_qos = rclcpp::SensorDataQoS();
+
   camera_info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>(
-    "~/camera_info", rclcpp::QoS(10));
+    "~/camera_info", sensor_qos);
 
   if (enable_raw_) {
-    raw_pub_ = image_transport::create_publisher(this, "~/raw/image_raw");
+    raw_pub_ = image_transport::create_publisher(
+      this, "~/raw/image_raw", rmw_qos_profile_sensor_data);
   }
   if (enable_rectified_ || enable_diff_ || enable_depth_) {
-    rectified_pub_ = image_transport::create_publisher(this, "~/rectified/image");
+    rectified_pub_ = image_transport::create_publisher(
+      this, "~/rectified/image", rmw_qos_profile_sensor_data);
   }
   if (enable_diff_ || enable_depth_) {
-    diff_pub_ = image_transport::create_publisher(this, "~/diff/image");
+    diff_pub_ = image_transport::create_publisher(
+      this, "~/diff/image", rmw_qos_profile_sensor_data);
   }
   if (enable_depth_) {
-    depth_pub_ = image_transport::create_publisher(this, "~/depth/image");
+    depth_pub_ = image_transport::create_publisher(
+      this, "~/depth/image", rmw_qos_profile_sensor_data);
   }
 }
 
