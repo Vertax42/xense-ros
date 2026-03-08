@@ -177,17 +177,25 @@ void XenseCameraNode::publish_static_tf()
 }
 
 // Called from SDK capture thread — must return immediately.
+// notify_one() ensures the publish thread wakes immediately when a frame
+// arrives, even if the WallTimer has not fired yet.
 void XenseCameraNode::on_frame_set(xense::FrameSet frames)
 {
   if (frames.empty()) {
     return;
   }
-  std::lock_guard<std::mutex> lock(frame_mutex_);
-  latest_frame_ = std::move(frames);
-  has_new_frame_ = true;
+  {
+    std::lock_guard<std::mutex> lock(frame_mutex_);
+    latest_frame_ = std::move(frames);
+    has_new_frame_ = true;
+  }
+  publish_cv_.notify_one();
 }
 
 // Called by WallTimer on the executor thread — O(1), never blocks.
+// Acts as a rate-limiter: if a frame arrived before the tick, this is a no-op
+// (thread already published). If a frame arrives after the tick, the
+// on_frame_set notify will wake the thread without waiting for the next tick.
 void XenseCameraNode::publish_timer_cb()
 {
   publish_cv_.notify_one();
