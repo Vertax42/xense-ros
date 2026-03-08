@@ -61,10 +61,16 @@ source install/setup.bash
 ros2 launch xense_camera xense_launch.py
 ```
 
-### Enable depth pipeline
+### Enable fast difference stream (SingleInference)
 
 ```bash
-ros2 launch xense_camera xense_launch.py enable_diff:=true enable_depth:=true
+ros2 launch xense_camera xense_launch.py enable_diff_single:=true
+```
+
+### Enable accurate continuous difference stream (PerFrameInference)
+
+```bash
+ros2 launch xense_camera xense_launch.py enable_diff_continuous:=true
 ```
 
 ### Select a specific device by serial
@@ -86,25 +92,34 @@ ros2 launch xense_camera xense_launch.py \
 
 All topics are published under the node's namespace (default: `/xense_camera`).
 
+Publishers use **RELIABLE QoS** (depth 10) — compatible with rviz2 and all standard ROS2 subscribers out of the box.
+
 | Topic | Type | Encoding | Enabled by |
 |---|---|---|---|
 | `~/raw/image_raw` | `sensor_msgs/Image` | `bgr8` | `enable_raw:=true` |
 | `~/rectified/image` | `sensor_msgs/Image` | `bgr8` | `enable_rectified` (default **on**) |
-| `~/diff/image` | `sensor_msgs/Image` | `32FC1` | `enable_diff:=true` |
-| `~/depth/image` | `sensor_msgs/Image` | `32FC1` | `enable_depth:=true` |
+| `~/diff/single/image` | `sensor_msgs/Image` | `bgr8` | `enable_diff_single:=true` |
+| `~/diff/continuous/image` | `sensor_msgs/Image` | `bgr8` | `enable_diff_continuous:=true` |
 | `~/camera_info` | `sensor_msgs/CameraInfo` | — | always |
 
-> **Note:** Depth values are in the range **[0.0, 1.0]** representing normalised tactile gel deformation — not metric scene depth.
+### Diff stream modes
+
+| Topic | SDK mode | Description |
+|---|---|---|
+| `~/diff/single/image` | `SingleInference` | Reference frame inferred **once at startup**. ~10× faster. Best for static contact scenarios. |
+| `~/diff/continuous/image` | `PerFrameInference` | Reference re-inferred **every frame** via neural network. More accurate for dynamic contact. |
+
+> `enable_diff_single` and `enable_diff_continuous` are **mutually exclusive** — only one diff mode can run per pipeline. If both are set, `continuous` takes priority and a warning is logged.
 
 ### Stream dependencies
 
-Enabling a stream automatically includes any upstream streams it requires:
+Enabling a diff stream automatically adds the upstream rectified stream:
 
 ```
-enable_raw      → Raw
-enable_rectified → Rectified
-enable_diff     → Rectified + Diff
-enable_depth    → Rectified + Diff + Depth
+enable_raw               → Raw
+enable_rectified         → Rectified
+enable_diff_single       → Rectified + Diff  (SingleInference)
+enable_diff_continuous   → Rectified + Diff  (PerFrameInference)
 ```
 
 ---
@@ -119,13 +134,24 @@ See [`xense_camera/config/xense_params.yaml`](xense_camera/config/xense_params.y
 | `device_index` | int | `-1` | V4L2 index (-1 = auto-detect) |
 | `enable_raw` | bool | `false` | Publish raw camera frames |
 | `enable_rectified` | bool | `true` | Publish rectified frames |
-| `enable_diff` | bool | `false` | Publish difference image |
-| `enable_depth` | bool | `false` | Publish tactile depth map |
-| `diff_mode` | string | `SingleInference` | `SingleInference` or `PerFrameInference` |
-| `inference_backend` | string | `Auto` | Inference backend |
+| `enable_diff_single` | bool | `false` | Publish fast diff on `~/diff/single/image` |
+| `enable_diff_continuous` | bool | `false` | Publish accurate diff on `~/diff/continuous/image` |
+| `inference_backend` | string | `Auto` | Inference backend (`Auto`, `CPU`, `ONNX`, `MIGraphX`, …) |
 | `use_gpu` | bool | `true` | Use GPU for inference |
 | `camera_frame_id` | string | `xense_camera_link` | TF frame ID |
 | `publish_tf` | bool | `true` | Publish world→camera static TF |
+
+---
+
+## Monitoring publish rate
+
+The node logs the actual publish rate every 3 seconds at INFO level:
+
+```
+[fps] Node publish rate: 30.00 Hz (90 frames / 3.0 s)
+```
+
+Use this — or `ros2 topic hz /xense_camera/camera_info` — to verify frame rate. Avoid running `ros2 topic hz` directly on image topics: the Python subscriber may drop messages due to deserialisation overhead on large images (840 KB per frame at 30 Hz), producing a falsely low reading.
 
 ---
 
