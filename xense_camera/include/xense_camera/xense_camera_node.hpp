@@ -2,8 +2,7 @@
 
 #include <memory>
 #include <string>
-#include <thread>
-#include <atomic>
+#include <mutex>
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -35,6 +34,7 @@ private:
   bool use_gpu_;
   std::string camera_frame_id_;
   bool publish_tf_;
+  double publish_fps_;
 
   // SDK objects
   xense::Pipeline pipeline_;
@@ -49,15 +49,18 @@ private:
   // TF
   std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
 
-  // Publish thread: calls wait_for_frames() in a loop, rate driven by hardware
-  std::thread publish_thread_;
-  std::atomic<bool> publish_thread_running_{false};
+  // Latest frame slot: SDK callback writes, WallTimer reads at fixed rate
+  xense::FrameSet latest_frame_;
+  std::mutex frame_mutex_;
+  bool has_new_frame_{false};
+  rclcpp::TimerBase::SharedPtr publish_timer_;
 
   void declare_parameters();
   xense::PipelineConfig build_pipeline_config();
   void create_publishers();
   void publish_static_tf();
-  void publish_loop();
+  void on_frame_set(xense::FrameSet frames);  // SDK thread: stores latest frame
+  void publish_timer_cb();                     // WallTimer: publishes at fixed rate
   void publish_frame_set(xense::FrameSet & frames);
 };
 

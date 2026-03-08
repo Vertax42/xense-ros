@@ -12,7 +12,6 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
 {
   declare_parameters();
 
-  // Retrieve parameters
   device_serial_ = get_parameter("device_serial").as_string();
   device_index_ = get_parameter("device_index").as_int();
   enable_raw_ = get_parameter("enable_raw").as_bool();
@@ -24,6 +23,7 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
   use_gpu_ = get_parameter("use_gpu").as_bool();
   camera_frame_id_ = get_parameter("camera_frame_id").as_string();
   publish_tf_ = get_parameter("publish_tf").as_bool();
+  publish_fps_ = get_parameter("publish_fps").as_double();
 
   if (!enable_raw_ && !enable_rectified_ && !enable_diff_ && !enable_depth_) {
     RCLCPP_WARN(get_logger(),
@@ -39,9 +39,11 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
     publish_static_tf();
   }
 
-  // Start publish thread before pipeline so it is ready when frames arrive.
-  publish_thread_running_ = true;
-  publish_thread_ = std::thread(&XenseCameraNode::publish_loop, this);
+  // WallTimer drives publishing at a fixed rate independent of SDK delivery jitter.
+  const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::duration<double>(1.0 / publish_fps_));
+  publish_timer_ = create_wall_timer(period,
+    std::bind(&XenseCameraNode::publish_timer_cb, this));
 
   auto config = build_pipeline_config();
 
@@ -53,27 +55,25 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(get_logger(), "  enable_depth    : %s", enable_depth_ ? "true" : "false");
   RCLCPP_INFO(get_logger(), "  diff_mode       : %s", diff_mode_.c_str());
   RCLCPP_INFO(get_logger(), "  inference_backend: %s", inference_backend_.c_str());
+  RCLCPP_INFO(get_logger(), "  publish_fps     : %.1f", publish_fps_);
 
-  // Polling mode: publish_loop calls wait_for_frames() directly.
-  pipeline_.start(config);
+  pipeline_.start(config, [this](xense::FrameSet frames) {
+    on_frame_set(std::move(frames));
+  });
 
   RCLCPP_INFO(get_logger(), "Xense camera node started.");
 }
 
 XenseCameraNode::~XenseCameraNode()
 {
-  // Stop pipeline first so wait_for_frames() unblocks and publish_loop exits.
+  publish_timer_->cancel();
+
   try {
     if (pipeline_.is_running()) {
       pipeline_.stop();
     }
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "Error stopping pipeline: %s", e.what());
-  }
-
-  publish_thread_running_ = false;
-  if (publish_thread_.joinable()) {
-    publish_thread_.join();
   }
 }
 
@@ -90,6 +90,7 @@ void XenseCameraNode::declare_parameters()
   declare_parameter<bool>("use_gpu", true);
   declare_parameter<std::string>("camera_frame_id", "xense_camera_link");
   declare_parameter<bool>("publish_tf", true);
+  declare_parameter<double>("publish_fps", 30.0);
 }
 
 xense::PipelineConfig XenseCameraNode::build_pipeline_config()
@@ -164,19 +165,30 @@ void XenseCameraNode::publish_static_tf()
   static_tf_broadcaster_->sendTransform(tf_msg);
 }
 
-// Publish thread: blocks on wait_for_frames() so publish rate exactly tracks
-// the hardware frame rate. No sleep or rate limiting needed.
-void XenseCameraNode::publish_loop()
+// Called from SDK capture thread — returns immediately.
+void XenseCameraNode::on_frame_set(xense::FrameSet frames)
 {
-  while (publish_thread_running_) {
-    xense::FrameSet frames = pipeline_.wait_for_frames(1000 /*ms*/);
-    if (frames.empty()) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-        "wait_for_frames timed out — no frame received.");
-      continue;
-    }
-    publish_frame_set(frames);
+  if (frames.empty()) {
+    return;
   }
+  std::lock_guard<std::mutex> lock(frame_mutex_);
+  latest_frame_ = std::move(frames);
+  has_new_frame_ = true;
+}
+
+// Called by WallTimer on the executor thread at publish_fps_ Hz.
+void XenseCameraNode::publish_timer_cb()
+{
+  xense::FrameSet frames;
+  {
+    std::lock_guard<std::mutex> lock(frame_mutex_);
+    if (!has_new_frame_) {
+      return;
+    }
+    frames = std::move(latest_frame_);
+    has_new_frame_ = false;
+  }
+  publish_frame_set(frames);
 }
 
 void XenseCameraNode::publish_frame_set(xense::FrameSet & frames)
