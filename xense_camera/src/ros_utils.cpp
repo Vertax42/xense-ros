@@ -14,18 +14,22 @@ sensor_msgs::msg::Image frame_to_bgr8(
     throw std::runtime_error("frame_to_bgr8: invalid frame");
   }
 
+  const uint32_t w = static_cast<uint32_t>(frame.width());
+  const uint32_t h = static_cast<uint32_t>(frame.height());
+  const uint32_t step = w * 3u;  // bgr8: 3 bytes per pixel, no padding
+
   sensor_msgs::msg::Image msg;
-  msg.header.stamp = rclcpp::Time(frame.timestamp_us() * 1000LL);  // us -> ns
+  msg.header.stamp = rclcpp::Time(frame.timestamp_us() * 1000LL);
   msg.header.frame_id = frame_id;
-  msg.width = static_cast<uint32_t>(frame.width());
-  msg.height = static_cast<uint32_t>(frame.height());
+  msg.width = w;
+  msg.height = h;
   msg.encoding = "bgr8";
-  msg.step = static_cast<uint32_t>(frame.stride());
+  msg.step = step;
   msg.is_bigendian = false;
 
-  const size_t data_size = frame.data_size();
-  msg.data.resize(data_size);
-  std::memcpy(msg.data.data(), frame.data(), data_size);
+  const size_t expected = static_cast<size_t>(h) * step;
+  msg.data.resize(expected);
+  std::memcpy(msg.data.data(), frame.data(), std::min(expected, frame.data_size()));
 
   return msg;
 }
@@ -38,18 +42,22 @@ sensor_msgs::msg::Image frame_to_float32(
     throw std::runtime_error("frame_to_float32: invalid frame");
   }
 
+  const uint32_t w = static_cast<uint32_t>(frame.width());
+  const uint32_t h = static_cast<uint32_t>(frame.height());
+  const uint32_t step = w * 4u;  // 32FC1: 4 bytes per pixel, no padding
+
   sensor_msgs::msg::Image msg;
-  msg.header.stamp = rclcpp::Time(frame.timestamp_us() * 1000LL);  // us -> ns
+  msg.header.stamp = rclcpp::Time(frame.timestamp_us() * 1000LL);
   msg.header.frame_id = frame_id;
-  msg.width = static_cast<uint32_t>(frame.width());
-  msg.height = static_cast<uint32_t>(frame.height());
+  msg.width = w;
+  msg.height = h;
   msg.encoding = "32FC1";
-  msg.step = static_cast<uint32_t>(frame.stride());
+  msg.step = step;
   msg.is_bigendian = false;
 
-  const size_t data_size = frame.data_size();
-  msg.data.resize(data_size);
-  std::memcpy(msg.data.data(), frame.data(), data_size);
+  const size_t expected = static_cast<size_t>(h) * step;
+  msg.data.resize(expected);
+  std::memcpy(msg.data.data(), frame.data(), std::min(expected, frame.data_size()));
 
   return msg;
 }
