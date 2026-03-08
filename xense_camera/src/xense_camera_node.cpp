@@ -40,6 +40,11 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
     publish_static_tf();
   }
 
+  // Start publish thread before pipeline so it is ready to drain frames immediately.
+  // This decouples the SDK capture thread from ROS publishing work.
+  publish_thread_running_ = true;
+  publish_thread_ = std::thread(&XenseCameraNode::publish_loop, this);
+
   // Build and start pipeline
   auto config = build_pipeline_config();
 
@@ -61,12 +66,23 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
 
 XenseCameraNode::~XenseCameraNode()
 {
+  // Stop pipeline first so no new frames are enqueued.
   try {
     if (pipeline_.is_running()) {
       pipeline_.stop();
     }
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "Error stopping pipeline: %s", e.what());
+  }
+
+  // Signal publish thread to exit and wait for it to finish.
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    publish_thread_running_ = false;
+  }
+  queue_cv_.notify_all();
+  if (publish_thread_.joinable()) {
+    publish_thread_.join();
   }
 }
 
@@ -122,12 +138,8 @@ xense::PipelineConfig XenseCameraNode::build_pipeline_config()
 
 void XenseCameraNode::create_publishers()
 {
-  // Use SensorDataQoS (BEST_EFFORT, VOLATILE, depth=10) for all sensor topics.
-  // BEST_EFFORT avoids blocking the publish call when subscribers are slow.
-  const auto sensor_qos = rclcpp::SensorDataQoS();
-
   camera_info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>(
-    "~/camera_info", sensor_qos);
+    "~/camera_info", rclcpp::SensorDataQoS());
 
   if (enable_raw_) {
     raw_pub_ = image_transport::create_publisher(
@@ -163,12 +175,53 @@ void XenseCameraNode::publish_static_tf()
   static_tf_broadcaster_->sendTransform(tf_msg);
 }
 
+// Called from the SDK's capture thread — must return immediately.
+// Only enqueues the FrameSet; all conversion and publishing happens in publish_loop().
 void XenseCameraNode::on_frame_set(xense::FrameSet frames)
 {
   if (frames.empty()) {
     return;
   }
 
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    // Drop the oldest frame if the publish thread is falling behind,
+    // so V4L2 buffers are never left un-dequeued.
+    if (frame_queue_.size() >= 2) {
+      frame_queue_.pop();
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+        "Publish thread too slow; dropping oldest frame.");
+    }
+    frame_queue_.push(std::move(frames));
+  }
+  queue_cv_.notify_one();
+}
+
+// Runs in publish_thread_ — does all frame conversion and ROS publishing.
+void XenseCameraNode::publish_loop()
+{
+  while (true) {
+    xense::FrameSet frames;
+    {
+      std::unique_lock<std::mutex> lock(queue_mutex_);
+      queue_cv_.wait(lock, [this] {
+        return !frame_queue_.empty() || !publish_thread_running_;
+      });
+
+      if (!publish_thread_running_ && frame_queue_.empty()) {
+        break;
+      }
+
+      frames = std::move(frame_queue_.front());
+      frame_queue_.pop();
+    }
+
+    publish_frame_set(frames);
+  }
+}
+
+void XenseCameraNode::publish_frame_set(xense::FrameSet & frames)
+{
   // Determine timestamp from the first available frame
   rclcpp::Time stamp = now();
   if (auto first = frames.first(); first.valid()) {
@@ -216,7 +269,6 @@ void XenseCameraNode::on_frame_set(xense::FrameSet frames)
     auto frame = frames.get(xense::StreamType::Diff);
     if (frame.valid()) {
       try {
-        // Diff frame format: check actual format
         sensor_msgs::msg::Image msg;
         if (frame.format() == xense::FrameFormat::Float32) {
           msg = frame_to_float32(frame, camera_frame_id_);
