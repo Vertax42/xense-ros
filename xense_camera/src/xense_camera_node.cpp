@@ -40,13 +40,10 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
     publish_static_tf();
   }
 
-  // Start fixed-rate timer to publish frames. The timer fires at publish_fps_ Hz
-  // regardless of SDK delivery jitter, giving stable ros2 topic hz output.
+  // Start fixed-rate publish thread before pipeline.
   publish_fps_ = get_parameter("publish_fps").as_double();
-  const auto period_ms = std::chrono::duration<double, std::milli>(1000.0 / publish_fps_);
-  publish_timer_ = create_wall_timer(
-    std::chrono::duration_cast<std::chrono::nanoseconds>(period_ms),
-    std::bind(&XenseCameraNode::publish_timer_cb, this));
+  publish_thread_running_ = true;
+  publish_thread_ = std::thread(&XenseCameraNode::publish_loop, this);
 
   // Build and start pipeline
   auto config = build_pipeline_config();
@@ -69,7 +66,10 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
 
 XenseCameraNode::~XenseCameraNode()
 {
-  publish_timer_->cancel();
+  publish_thread_running_ = false;
+  if (publish_thread_.joinable()) {
+    publish_thread_.join();
+  }
 
   try {
     if (pipeline_.is_running()) {
@@ -182,21 +182,31 @@ void XenseCameraNode::on_frame_set(xense::FrameSet frames)
   has_new_frame_ = true;
 }
 
-// Called by the ROS WallTimer at a fixed rate (publish_fps_).
-// Grabs the latest frame and publishes it. If no new frame has arrived since
-// the last tick, skips publishing rather than re-publishing a stale frame.
-void XenseCameraNode::publish_timer_cb()
+// Runs in publish_thread_. Uses steady_clock::sleep_until to tick at exactly
+// publish_fps_ Hz regardless of how long publish_frame_set() takes.
+// next_tick advances by a fixed duration each iteration so the long-run
+// average stays at the target rate even when individual publishes run long.
+void XenseCameraNode::publish_loop()
 {
-  xense::FrameSet frames;
-  {
-    std::lock_guard<std::mutex> lock(frame_mutex_);
-    if (!has_new_frame_) {
-      return;
+  using clock = std::chrono::steady_clock;
+  const std::chrono::duration<double> period(1.0 / publish_fps_);
+  auto next_tick = clock::now() + period;
+
+  while (publish_thread_running_) {
+    std::this_thread::sleep_until(next_tick);
+    next_tick += period;  // absolute advance: no drift accumulation
+
+    xense::FrameSet frames;
+    {
+      std::lock_guard<std::mutex> lock(frame_mutex_);
+      if (!has_new_frame_) {
+        continue;
+      }
+      frames = std::move(latest_frame_);
+      has_new_frame_ = false;
     }
-    frames = std::move(latest_frame_);
-    has_new_frame_ = false;
+    publish_frame_set(frames);
   }
-  publish_frame_set(frames);
 }
 
 void XenseCameraNode::publish_frame_set(xense::FrameSet & frames)

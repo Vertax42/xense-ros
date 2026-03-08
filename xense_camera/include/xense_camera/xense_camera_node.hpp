@@ -3,6 +3,8 @@
 #include <memory>
 #include <string>
 #include <mutex>
+#include <thread>
+#include <atomic>
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -48,19 +50,20 @@ private:
   // TF
   std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
 
-  // Latest frame slot: SDK callback writes here, timer reads at fixed rate
+  // Latest frame slot: SDK callback writes, publish thread reads at fixed rate
   xense::FrameSet latest_frame_;
   std::mutex frame_mutex_;
   bool has_new_frame_{false};
-  rclcpp::TimerBase::SharedPtr publish_timer_;
+  std::thread publish_thread_;
+  std::atomic<bool> publish_thread_running_{false};
 
   // Internal
   void declare_parameters();
   xense::PipelineConfig build_pipeline_config();
   void create_publishers();
   void publish_static_tf();
-  void on_frame_set(xense::FrameSet frames);   // called from SDK thread: stores latest frame
-  void publish_timer_cb();                      // fires at fixed publish_fps_ rate
+  void on_frame_set(xense::FrameSet frames);  // SDK thread: stores latest frame
+  void publish_loop();                         // dedicated thread: fixed-rate sleep_until
   void publish_frame_set(xense::FrameSet & frames);
 
   double publish_fps_;
