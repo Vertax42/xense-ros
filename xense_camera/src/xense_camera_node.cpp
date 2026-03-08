@@ -25,7 +25,6 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
   camera_frame_id_ = get_parameter("camera_frame_id").as_string();
   publish_tf_ = get_parameter("publish_tf").as_bool();
 
-  // Require at least one stream
   if (!enable_raw_ && !enable_rectified_ && !enable_diff_ && !enable_depth_) {
     RCLCPP_WARN(get_logger(),
       "No streams enabled. Defaulting to enable_rectified=true.");
@@ -40,43 +39,41 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
     publish_static_tf();
   }
 
-  // Start fixed-rate publish thread before pipeline.
-  publish_fps_ = get_parameter("publish_fps").as_double();
+  // Start publish thread before pipeline so it is ready when frames arrive.
   publish_thread_running_ = true;
   publish_thread_ = std::thread(&XenseCameraNode::publish_loop, this);
 
-  // Build and start pipeline
   auto config = build_pipeline_config();
 
   RCLCPP_INFO(get_logger(), "Starting xense pipeline...");
-  RCLCPP_INFO(get_logger(), "  device_serial : '%s'", device_serial_.c_str());
-  RCLCPP_INFO(get_logger(), "  enable_raw    : %s", enable_raw_ ? "true" : "false");
+  RCLCPP_INFO(get_logger(), "  device_serial   : '%s'", device_serial_.c_str());
+  RCLCPP_INFO(get_logger(), "  enable_raw      : %s", enable_raw_ ? "true" : "false");
   RCLCPP_INFO(get_logger(), "  enable_rectified: %s", enable_rectified_ ? "true" : "false");
-  RCLCPP_INFO(get_logger(), "  enable_diff   : %s", enable_diff_ ? "true" : "false");
-  RCLCPP_INFO(get_logger(), "  enable_depth  : %s", enable_depth_ ? "true" : "false");
-  RCLCPP_INFO(get_logger(), "  diff_mode     : %s", diff_mode_.c_str());
+  RCLCPP_INFO(get_logger(), "  enable_diff     : %s", enable_diff_ ? "true" : "false");
+  RCLCPP_INFO(get_logger(), "  enable_depth    : %s", enable_depth_ ? "true" : "false");
+  RCLCPP_INFO(get_logger(), "  diff_mode       : %s", diff_mode_.c_str());
   RCLCPP_INFO(get_logger(), "  inference_backend: %s", inference_backend_.c_str());
 
-  pipeline_.start(config, [this](xense::FrameSet frames) {
-    on_frame_set(std::move(frames));
-  });
+  // Polling mode: publish_loop calls wait_for_frames() directly.
+  pipeline_.start(config);
 
   RCLCPP_INFO(get_logger(), "Xense camera node started.");
 }
 
 XenseCameraNode::~XenseCameraNode()
 {
-  publish_thread_running_ = false;
-  if (publish_thread_.joinable()) {
-    publish_thread_.join();
-  }
-
+  // Stop pipeline first so wait_for_frames() unblocks and publish_loop exits.
   try {
     if (pipeline_.is_running()) {
       pipeline_.stop();
     }
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "Error stopping pipeline: %s", e.what());
+  }
+
+  publish_thread_running_ = false;
+  if (publish_thread_.joinable()) {
+    publish_thread_.join();
   }
 }
 
@@ -93,13 +90,10 @@ void XenseCameraNode::declare_parameters()
   declare_parameter<bool>("use_gpu", true);
   declare_parameter<std::string>("camera_frame_id", "xense_camera_link");
   declare_parameter<bool>("publish_tf", true);
-  declare_parameter<double>("publish_fps", 30.0);
 }
 
 xense::PipelineConfig XenseCameraNode::build_pipeline_config()
 {
-  // Collect the set of required streams, respecting upstream dependencies.
-  // Depth requires Diff; Diff requires Rectified; Raw is independent.
   std::vector<std::string> streams;
 
   if (enable_raw_) {
@@ -170,40 +164,16 @@ void XenseCameraNode::publish_static_tf()
   static_tf_broadcaster_->sendTransform(tf_msg);
 }
 
-// Called from the SDK's capture thread — must return immediately.
-// Overwrites the latest frame slot; old frame is discarded if not yet published.
-void XenseCameraNode::on_frame_set(xense::FrameSet frames)
-{
-  if (frames.empty()) {
-    return;
-  }
-  std::lock_guard<std::mutex> lock(frame_mutex_);
-  latest_frame_ = std::move(frames);
-  has_new_frame_ = true;
-}
-
-// Runs in publish_thread_. Uses steady_clock::sleep_until to tick at exactly
-// publish_fps_ Hz regardless of how long publish_frame_set() takes.
-// next_tick advances by a fixed duration each iteration so the long-run
-// average stays at the target rate even when individual publishes run long.
+// Publish thread: blocks on wait_for_frames() so publish rate exactly tracks
+// the hardware frame rate. No sleep or rate limiting needed.
 void XenseCameraNode::publish_loop()
 {
-  using clock = std::chrono::steady_clock;
-  const std::chrono::duration<double> period(1.0 / publish_fps_);
-  auto next_tick = clock::now() + period;
-
   while (publish_thread_running_) {
-    std::this_thread::sleep_until(next_tick);
-    next_tick += period;  // absolute advance: no drift accumulation
-
-    xense::FrameSet frames;
-    {
-      std::lock_guard<std::mutex> lock(frame_mutex_);
-      if (!has_new_frame_) {
-        continue;
-      }
-      frames = std::move(latest_frame_);
-      has_new_frame_ = false;
+    xense::FrameSet frames = pipeline_.wait_for_frames(1000 /*ms*/);
+    if (frames.empty()) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+        "wait_for_frames timed out — no frame received.");
+      continue;
     }
     publish_frame_set(frames);
   }
@@ -211,13 +181,11 @@ void XenseCameraNode::publish_loop()
 
 void XenseCameraNode::publish_frame_set(xense::FrameSet & frames)
 {
-  // Determine timestamp from the first available frame
   rclcpp::Time stamp = now();
   if (auto first = frames.first(); first.valid()) {
     stamp = rclcpp::Time(first.timestamp_us() * 1000LL);
   }
 
-  // Publish camera_info once per frame set
   auto cam_info = make_camera_info(
     frames.first().width(),
     frames.first().height(),
@@ -225,45 +193,37 @@ void XenseCameraNode::publish_frame_set(xense::FrameSet & frames)
     stamp);
   camera_info_pub_->publish(cam_info);
 
-  // Raw
   if (enable_raw_ && frames.contains(xense::StreamType::Raw)) {
     auto frame = frames.get(xense::StreamType::Raw);
     if (frame.valid()) {
       try {
-        auto msg = frame_to_bgr8(frame, camera_frame_id_);
-        raw_pub_.publish(msg);
+        raw_pub_.publish(frame_to_bgr8(frame, camera_frame_id_));
       } catch (const std::exception & e) {
         RCLCPP_WARN(get_logger(), "Failed to publish raw frame: %s", e.what());
       }
     }
   }
 
-  // Rectified
   if ((enable_rectified_ || enable_diff_ || enable_depth_) &&
     frames.contains(xense::StreamType::Rectified))
   {
     auto frame = frames.get(xense::StreamType::Rectified);
     if (frame.valid()) {
       try {
-        auto msg = frame_to_bgr8(frame, camera_frame_id_);
-        rectified_pub_.publish(msg);
+        rectified_pub_.publish(frame_to_bgr8(frame, camera_frame_id_));
       } catch (const std::exception & e) {
         RCLCPP_WARN(get_logger(), "Failed to publish rectified frame: %s", e.what());
       }
     }
   }
 
-  // Diff
   if ((enable_diff_ || enable_depth_) && frames.contains(xense::StreamType::Diff)) {
     auto frame = frames.get(xense::StreamType::Diff);
     if (frame.valid()) {
       try {
-        sensor_msgs::msg::Image msg;
-        if (frame.format() == xense::FrameFormat::Float32) {
-          msg = frame_to_float32(frame, camera_frame_id_);
-        } else {
-          msg = frame_to_bgr8(frame, camera_frame_id_);
-        }
+        sensor_msgs::msg::Image msg = (frame.format() == xense::FrameFormat::Float32)
+          ? frame_to_float32(frame, camera_frame_id_)
+          : frame_to_bgr8(frame, camera_frame_id_);
         diff_pub_.publish(msg);
       } catch (const std::exception & e) {
         RCLCPP_WARN(get_logger(), "Failed to publish diff frame: %s", e.what());
@@ -271,13 +231,11 @@ void XenseCameraNode::publish_frame_set(xense::FrameSet & frames)
     }
   }
 
-  // Depth (Float32, values in [0, 1])
   if (enable_depth_ && frames.contains(xense::StreamType::Depth)) {
     auto frame = frames.get(xense::StreamType::Depth);
     if (frame.valid()) {
       try {
-        auto msg = frame_to_float32(frame, camera_frame_id_);
-        depth_pub_.publish(msg);
+        depth_pub_.publish(frame_to_float32(frame, camera_frame_id_));
       } catch (const std::exception & e) {
         RCLCPP_WARN(get_logger(), "Failed to publish depth frame: %s", e.what());
       }
