@@ -39,7 +39,12 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
     publish_static_tf();
   }
 
-  // WallTimer drives publishing at a fixed rate independent of SDK delivery jitter.
+  // Start publish thread before pipeline so it is ready when frames arrive.
+  publish_thread_running_ = true;
+  publish_thread_ = std::thread(&XenseCameraNode::publish_loop, this);
+
+  // WallTimer runs at publish_fps_ Hz on the executor thread.
+  // Its only job is notify_one() — never blocks the executor.
   const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
     std::chrono::duration<double>(1.0 / publish_fps_));
   publish_timer_ = create_wall_timer(period,
@@ -67,6 +72,12 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
 XenseCameraNode::~XenseCameraNode()
 {
   publish_timer_->cancel();
+
+  publish_thread_running_ = false;
+  publish_cv_.notify_all();
+  if (publish_thread_.joinable()) {
+    publish_thread_.join();
+  }
 
   try {
     if (pipeline_.is_running()) {
@@ -165,7 +176,7 @@ void XenseCameraNode::publish_static_tf()
   static_tf_broadcaster_->sendTransform(tf_msg);
 }
 
-// Called from SDK capture thread — returns immediately.
+// Called from SDK capture thread — must return immediately.
 void XenseCameraNode::on_frame_set(xense::FrameSet frames)
 {
   if (frames.empty()) {
@@ -176,19 +187,41 @@ void XenseCameraNode::on_frame_set(xense::FrameSet frames)
   has_new_frame_ = true;
 }
 
-// Called by WallTimer on the executor thread at publish_fps_ Hz.
+// Called by WallTimer on the executor thread — O(1), never blocks.
 void XenseCameraNode::publish_timer_cb()
 {
-  xense::FrameSet frames;
-  {
-    std::lock_guard<std::mutex> lock(frame_mutex_);
-    if (!has_new_frame_) {
-      return;
+  publish_cv_.notify_one();
+}
+
+// Publish thread: wakes on each timer tick, grabs the latest frame, publishes.
+// Decouples heavy frame conversion from the executor thread so the WallTimer
+// always fires on time.
+void XenseCameraNode::publish_loop()
+{
+  while (publish_thread_running_) {
+    {
+      std::unique_lock<std::mutex> lock(frame_mutex_);
+      publish_cv_.wait(lock, [this] {
+        return has_new_frame_ || !publish_thread_running_;
+      });
+
+      if (!publish_thread_running_) {
+        break;
+      }
     }
-    frames = std::move(latest_frame_);
-    has_new_frame_ = false;
+
+    xense::FrameSet frames;
+    {
+      std::lock_guard<std::mutex> lock(frame_mutex_);
+      if (!has_new_frame_) {
+        continue;
+      }
+      frames = std::move(latest_frame_);
+      has_new_frame_ = false;
+    }
+
+    publish_frame_set(frames);
   }
-  publish_frame_set(frames);
 }
 
 void XenseCameraNode::publish_frame_set(xense::FrameSet & frames)
