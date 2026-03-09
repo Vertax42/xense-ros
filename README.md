@@ -61,16 +61,16 @@ source install/setup.bash
 ros2 launch xense_camera xense_launch.py
 ```
 
-### Enable fast difference stream (SingleInference)
+### Enable difference stream (single mode)
 
 ```bash
-ros2 launch xense_camera xense_launch.py enable_diff_single:=true
+ros2 launch xense_camera xense_launch.py enable_diff:=true
 ```
 
-### Enable accurate continuous difference stream (PerFrameInference)
+### Enable difference stream (continuous mode)
 
 ```bash
-ros2 launch xense_camera xense_launch.py enable_diff_continuous:=true
+ros2 launch xense_camera xense_launch.py enable_diff:=true diff_mode:=continuous
 ```
 
 ### Select a specific device by serial
@@ -98,28 +98,24 @@ Publishers use **RELIABLE QoS** (depth 10) — compatible with rviz2 and all sta
 |---|---|---|---|
 | `~/raw/image_raw` | `sensor_msgs/Image` | `bgr8` | `enable_raw:=true` |
 | `~/rectified/image` | `sensor_msgs/Image` | `bgr8` | `enable_rectified` (default **on**) |
-| `~/diff/single/image` | `sensor_msgs/Image` | `bgr8` | `enable_diff_single:=true` |
-| `~/diff/continuous/image` | `sensor_msgs/Image` | `bgr8` | `enable_diff_continuous:=true` |
+| `~/diff/image` | `sensor_msgs/Image` | `32FC1` or `bgr8` | `enable_diff:=true` |
 | `~/camera_info` | `sensor_msgs/CameraInfo` | — | always |
 
 ### Diff stream modes
 
-| Topic | SDK mode | Description |
+| `diff_mode` | SDK mode | Description |
 |---|---|---|
-| `~/diff/single/image` | `SingleInference` | Reference frame inferred **once at startup**. ~10× faster. Best for static contact scenarios. |
-| `~/diff/continuous/image` | `PerFrameInference` | Reference re-inferred **every frame** via neural network. More accurate for dynamic contact. |
-
-> `enable_diff_single` and `enable_diff_continuous` are **mutually exclusive** — only one diff mode can run per pipeline. If both are set, `continuous` takes priority and a warning is logged.
+| `single` | `SingleInference` | Reference frame is inferred **once at startup**. |
+| `continuous` | `PerFrameInference` | Reference frame is inferred **on every frame**. |
 
 ### Stream dependencies
 
-Enabling a diff stream automatically adds the upstream rectified stream:
+Enabling diff automatically adds the upstream rectified stream:
 
 ```
 enable_raw               → Raw
 enable_rectified         → Rectified
-enable_diff_single       → Rectified + Diff  (SingleInference)
-enable_diff_continuous   → Rectified + Diff  (PerFrameInference)
+enable_diff              → Rectified + Diff
 ```
 
 ---
@@ -134,8 +130,8 @@ See [`xense_camera/config/xense_params.yaml`](xense_camera/config/xense_params.y
 | `device_index` | int | `-1` | V4L2 index (-1 = auto-detect) |
 | `enable_raw` | bool | `false` | Publish raw camera frames |
 | `enable_rectified` | bool | `true` | Publish rectified frames |
-| `enable_diff_single` | bool | `false` | Publish fast diff on `~/diff/single/image` |
-| `enable_diff_continuous` | bool | `false` | Publish accurate diff on `~/diff/continuous/image` |
+| `enable_diff` | bool | `false` | Publish difference image on `~/diff/image` |
+| `diff_mode` | string | `single` | `single` or `continuous` |
 | `inference_backend` | string | `Auto` | Inference backend (`Auto`, `CPU`, `ONNX`, `MIGraphX`, …) |
 | `use_gpu` | bool | `true` | Use GPU for inference |
 | `camera_frame_id` | string | `xense_camera_link` | TF frame ID |
