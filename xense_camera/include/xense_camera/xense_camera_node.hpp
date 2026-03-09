@@ -37,6 +37,7 @@ private:
   std::string camera_frame_id_;
   bool publish_tf_;
   double publish_fps_;
+  bool qos_reliable_;
 
   // SDK objects
   xense::Pipeline pipeline_;

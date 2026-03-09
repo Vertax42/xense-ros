@@ -23,6 +23,7 @@ XenseCameraNode::XenseCameraNode(const rclcpp::NodeOptions & options)
   camera_frame_id_ = get_parameter("camera_frame_id").as_string();
   publish_tf_ = get_parameter("publish_tf").as_bool();
   publish_fps_ = get_parameter("publish_fps").as_double();
+  qos_reliable_ = get_parameter("qos_reliable").as_bool();
 
   if (enable_diff_single_ && enable_diff_continuous_) {
     RCLCPP_WARN(get_logger(),
@@ -107,6 +108,7 @@ void XenseCameraNode::declare_parameters()
   declare_parameter<std::string>("camera_frame_id", "xense_camera_link");
   declare_parameter<bool>("publish_tf", true);
   declare_parameter<double>("publish_fps", 30.0);
+  declare_parameter<bool>("qos_reliable", true);
 }
 
 xense::PipelineConfig XenseCameraNode::build_pipeline_config()
@@ -141,24 +143,29 @@ xense::PipelineConfig XenseCameraNode::build_pipeline_config()
 
 void XenseCameraNode::create_publishers()
 {
+  const rmw_qos_profile_t img_qos =
+    qos_reliable_ ? rmw_qos_profile_default : rmw_qos_profile_sensor_data;
+  const rclcpp::QoS info_qos =
+    qos_reliable_ ? rclcpp::QoS(10) : rclcpp::SensorDataQoS();
+
   camera_info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>(
-    "~/camera_info", rclcpp::QoS(10));
+    "~/camera_info", info_qos);
 
   if (enable_raw_) {
     raw_pub_ = image_transport::create_publisher(
-      this, "~/raw/image_raw", rmw_qos_profile_default);
+      this, "~/raw/image_raw", img_qos);
   }
   if (enable_rectified_ || enable_diff_single_ || enable_diff_continuous_) {
     rectified_pub_ = image_transport::create_publisher(
-      this, "~/rectified/image", rmw_qos_profile_default);
+      this, "~/rectified/image", img_qos);
   }
   if (enable_diff_single_) {
     diff_single_pub_ = image_transport::create_publisher(
-      this, "~/diff/single/image", rmw_qos_profile_default);
+      this, "~/diff/single/image", img_qos);
   }
   if (enable_diff_continuous_) {
     diff_continuous_pub_ = image_transport::create_publisher(
-      this, "~/diff/continuous/image", rmw_qos_profile_default);
+      this, "~/diff/continuous/image", img_qos);
   }
 }
 
