@@ -16,9 +16,37 @@ find_package(geometry_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(tf2_ros REQUIRED)
-find_package(camera_info_manager REQUIRED)
 find_package(xense_msgs REQUIRED)
+
+# libxensesdk public dependencies (must be found before xensesdk targets are imported)
+find_package(spdlog REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc video imgcodecs)
+find_package(Eigen3 REQUIRED)
+find_package(nlohmann_json QUIET)
+if(NOT nlohmann_json_FOUND)
+  # nlohmann_json is header-only; no binary ABI concern when using a different
+  # version than what libxensesdk was compiled with.
+  # Fall back to locating the header directly (e.g. after: sudo apt install nlohmann-json3-dev).
+  find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp
+    HINTS /usr/include /usr/local/include)
+  if(NOT NLOHMANN_JSON_INCLUDE_DIR)
+    message(FATAL_ERROR
+      "nlohmann_json not found. Install with:\n"
+      "  sudo apt install nlohmann-json3-dev")
+  endif()
+  add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED)
+  set_target_properties(nlohmann_json::nlohmann_json PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${NLOHMANN_JSON_INCLUDE_DIR}")
+endif()
+
 find_package(xensesdk REQUIRED)
+
+# onnxruntime is a private dependency of libxensesdk but its symbols are not
+# fully resolved inside the shared library; link it explicitly here.
+find_library(ONNXRUNTIME_LIB onnxruntime
+  HINTS /usr/local/lib /usr/lib
+  REQUIRED)
+message(STATUS "onnxruntime: ${ONNXRUNTIME_LIB}")
 
 add_executable(xense_camera_node
   src/xense_camera_node_main.cpp
@@ -41,12 +69,12 @@ ament_target_dependencies(xense_camera_node
   cv_bridge
   image_transport
   tf2_ros
-  camera_info_manager
   xense_msgs
 )
 
 target_link_libraries(xense_camera_node
   xense::xensesdk
+  ${ONNXRUNTIME_LIB}
 )
 
 install(TARGETS xense_camera_node
