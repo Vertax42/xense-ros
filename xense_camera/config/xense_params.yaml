@@ -18,6 +18,11 @@ xense_camera:
     inference_backend: "Auto"
     use_gpu: true
 
+    # --- QoS ---
+    # true  = RELIABLE   (compatible with rviz2, rqt plugins)
+    # false = BEST_EFFORT (lower overhead, use with custom C++ subscribers)
+    qos_reliable: true
+
     # --- TF / coordinate frames ---
     camera_frame_id: "xense_camera_link"
     publish_tf: true
