@@ -2,7 +2,7 @@
  * Default parameters for xense_camera_node.
  *
  * Override any value from the command line:
- *   ros2 launch xense_camera xense_launch.py enable_depth:=true
+ *   ros2 launch xense_camera xense_launch.py enable_diff:=true
  *
  * Or supply this file via:
  *   ros2 launch xense_camera xense_launch.py params_file:=/path/to/xense_params.yaml
@@ -19,17 +19,16 @@ xense_camera:
 
     # --- Stream enable flags ---
     # Each flag enables the corresponding output topic.
-    # Depth implies Diff; Diff implies Rectified (upstream streams are added automatically).
+    # Diff implies Rectified (upstream streams are added automatically).
     enable_raw: false         # ~/raw/image_raw    (640x480 bgr8)
     enable_rectified: true    # ~/rectified/image   (400x700 bgr8)
     enable_diff: false        # ~/diff/image        (400x700 32FC1 or bgr8)
-    enable_depth: false       # ~/depth/image       (400x700 32FC1, values in [0,1])
 
     # --- Processing options ---
     # DiffProcessor mode.
-    #   SingleInference    – Reference frame is inferred once (fast, ~10x speedup).
-    #   PerFrameInference  – Reference is inferred every frame (more accurate, slower).
-    diff_mode: "SingleInference"
+    #   single      – Reference frame is inferred once at startup.
+    #   continuous  – Reference is inferred on every frame.
+    diff_mode: "single"
 
     # Inference backend for the neural network models.
     # Options: Auto, CPU, ONNX, MIGraphX, RKNN, CoreML, OpenVINO, DirectML
