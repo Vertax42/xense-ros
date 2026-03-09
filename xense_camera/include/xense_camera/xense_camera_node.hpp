@@ -2,7 +2,6 @@
 
 #include <memory>
 #include <string>
-#include <set>
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -28,7 +27,6 @@ private:
   bool enable_raw_;
   bool enable_rectified_;
   bool enable_diff_;
-  bool enable_depth_;
   std::string diff_mode_;
   std::string inference_backend_;
   bool use_gpu_;
@@ -39,11 +37,9 @@ private:
   xense::Pipeline pipeline_;
 
   // Publishers
-  std::shared_ptr<image_transport::ImageTransport> image_transport_;
   image_transport::Publisher raw_pub_;
   image_transport::Publisher rectified_pub_;
   image_transport::Publisher diff_pub_;
-  image_transport::Publisher depth_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub_;
 
   // TF
