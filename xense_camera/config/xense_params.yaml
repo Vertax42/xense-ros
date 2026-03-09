@@ -6,15 +6,16 @@ xense_camera:
     device_index: -1
 
     # --- Stream enable flags ---
-    enable_raw: false               # ~/raw/image_raw          (640x480 bgr8)
-    enable_rectified: true          # ~/rectified/image         (400x700 bgr8)
-    enable_diff_single: false       # ~/diff/single/image       (400x700 bgr8, fast)
-    enable_diff_continuous: false   # ~/diff/continuous/image   (400x700 bgr8, accurate)
-
-    # Note: enable_diff_single and enable_diff_continuous are mutually exclusive.
-    # If both are set, continuous takes priority and a warning is logged.
+    enable_raw: false               # ~/raw/image_raw    (640x480 bgr8)
+    enable_rectified: true          # ~/rectified/image   (400x700 bgr8)
+    enable_diff: false              # ~/diff/image        (400x700 32FC1 or bgr8)
 
     # --- Processing options ---
+    # DiffProcessor mode.
+    #   single      – Reference frame is inferred once at startup.
+    #   continuous  – Reference is inferred on every frame.
+    diff_mode: "single"
+
     inference_backend: "Auto"
     use_gpu: true
 

@@ -12,8 +12,8 @@ def launch_setup(context, *args, **kwargs):
         {
             'enable_raw': LaunchConfiguration('enable_raw'),
             'enable_rectified': LaunchConfiguration('enable_rectified'),
-            'enable_diff_single': LaunchConfiguration('enable_diff_single'),
-            'enable_diff_continuous': LaunchConfiguration('enable_diff_continuous'),
+            'enable_diff': LaunchConfiguration('enable_diff'),
+            'diff_mode': LaunchConfiguration('diff_mode'),
             'device_serial': LaunchConfiguration('device_serial'),
             'device_index': LaunchConfiguration('device_index'),
             'inference_backend': LaunchConfiguration('inference_backend'),
@@ -65,13 +65,13 @@ def generate_launch_description():
             default_value='true',
             description='Publish 400x700 rectified BGR8 frames on ~/rectified/image'),
         DeclareLaunchArgument(
-            'enable_diff_single',
+            'enable_diff',
             default_value='false',
-            description='Publish SingleInference diff on ~/diff/single/image (fast, reference inferred once)'),
+            description='Publish difference image on ~/diff/image (implies enable_rectified)'),
         DeclareLaunchArgument(
-            'enable_diff_continuous',
-            default_value='false',
-            description='Publish PerFrameInference diff on ~/diff/continuous/image (accurate, per-frame NN)'),
+            'diff_mode',
+            default_value='single',
+            description='DiffProcessor mode: single (infer reference once) or continuous (infer every frame)'),
         DeclareLaunchArgument(
             'inference_backend',
             default_value='Auto',
